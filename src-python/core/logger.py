@@ -112,7 +112,13 @@ def setup_logging():
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
     # Optional: silence extremely noisy loggers
-    for noisy in ["uvicorn.access", "httpx", "httpcore"]:
+    for noisy in [
+        "uvicorn.access",
+        "httpx",
+        "httpcore",
+        "sse_starlette",
+        "sse_starlette.sse",
+    ]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     # Intercept all existing loggers

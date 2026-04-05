@@ -9,7 +9,7 @@ SETTINGS_PATH = DATA_DIR / "settings.json"
 class Settings(BaseModel):
     theme: str = "system"
     provider: str = "vertexai"
-    model: str = "gemini-3-flash"
+    model: str = "gemini-3-flash-preview"
     embedding_provider: str = "vertexai"
     embedding_model: str = "text-embedding-004"
     rag_threshold: int = 100000

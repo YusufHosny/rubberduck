@@ -1,10 +1,12 @@
 import json
 from typing import AsyncGenerator
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_core.tools import tool
+from langchain_core.messages import (
+    HumanMessage,
+    AIMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from sqlmodel import Session, column, select
-from duckduckgo_search import DDGS
-from langchain.agents import create_agent
 
 from core.db import DATA_DIR
 from models.domain import Message as DBMessage, Project
@@ -12,6 +14,8 @@ from services.llm_provider import get_llm
 from services.ingestion_service import get_vectorstore
 from core.config import settings_manager
 from prompts.chat_prompts import SYSTEM_PROMPT
+from tools.project_tools import create_project_tools
+from langchain.agents import create_agent
 
 
 def get_project_notes(project_id: str) -> str:
@@ -51,12 +55,68 @@ def get_chat_history(session: Session, chat_id: str) -> list:
     ).all()
 
     langchain_history = []
-    for msg in db_messages:
-        if msg.role == "user":
-            langchain_history.append(HumanMessage(content=msg.content))
-        elif msg.role == "assistant":
-            langchain_history.append(AIMessage(content=msg.content))
 
+    current_ai_blocks = []
+    current_ai_tools = []
+
+    def flush_ai_message():
+        if current_ai_blocks or current_ai_tools:
+            content = []
+            kwargs = {}
+            for block in current_ai_blocks:
+                if block["type"] == "text":
+                    content.append({"type": "text", "text": block["content"]})
+                elif block["type"] == "reasoning":
+                    content.append(
+                        {
+                            "type": "text",
+                            "text": f"<thinking>\n{block['content']}\n</thinking>\n",
+                        }
+                    )
+
+            if not content:
+                content = ""
+
+            langchain_history.append(
+                AIMessage(
+                    content=content,
+                    tool_calls=current_ai_tools,
+                    additional_kwargs=kwargs,
+                )
+            )
+            current_ai_blocks.clear()
+            current_ai_tools.clear()
+
+    for msg in db_messages:
+        try:
+            if msg.role != "assistant":
+                flush_ai_message()
+
+            if msg.role == "user":
+                langchain_history.append(HumanMessage(content=msg.content))
+            elif msg.role == "assistant":
+                if msg.type == "text" or msg.type == "reasoning":
+                    current_ai_blocks.append({"type": msg.type, "content": msg.content})
+                elif msg.type == "tool_call":
+                    args = json.loads(msg.content) if msg.content else {}
+                    current_ai_tools.append(
+                        {
+                            "name": msg.name or "",
+                            "args": args,
+                            "id": msg.parent_id or "",
+                            "type": "tool_call",
+                        }
+                    )
+            elif msg.role == "tool":
+                langchain_history.append(
+                    ToolMessage(content=msg.content, tool_call_id=msg.parent_id or "")
+                )
+            elif msg.role == "system":
+                langchain_history.append(SystemMessage(content=msg.content))
+        except Exception as e:
+            print(f"Error parsing message {msg.id}: {e}")
+
+    flush_ai_message()
     return langchain_history
 
 
@@ -67,17 +127,21 @@ def generate_chat_name(project_id: str, chat_id: str, first_message: str):
         content = llm.invoke(prompt).content
         if isinstance(content, str):
             title = str(content)
-        elif isinstance(content, list) and len(content) == 1:
-            if isinstance(content[0], str):
-                title = content[0]
+        elif isinstance(content, list) and len(content) >= 1:
+            # Safely handle list of dicts or list of strings
+            first_block = content[0]
+            if isinstance(first_block, str):
+                title = first_block
+            elif isinstance(first_block, dict) and "text" in first_block:
+                title = str(first_block["text"])
             else:
-                if not content[0]["type"] == "text":
-                    raise Exception("Invalid chat name response type")
-                title = str(content[0]["text"])
+                title = "New Chat"
         else:
-            raise Exception("Unexpected chat name response format")
+            title = "New Chat"
 
         title = title.strip().strip('"').strip("'")
+        if not title:
+            title = "New Chat"
 
         from core.db import engine
         from sqlmodel import Session
@@ -107,67 +171,7 @@ async def stream_chat(
 
     llm = get_llm()
 
-    @tool
-    def web_search(search_query: str) -> str:
-        """Search the web using DuckDuckGo to find up-to-date information."""
-        try:
-            results = DDGS().text(search_query, max_results=3)
-            if not results:
-                return "No results found."
-            return "\n\n".join(
-                [
-                    f"Title: {r['title']}\nLink: {r['href']}\nSnippet: {r['body']}"
-                    for r in results
-                ]
-            )
-        except Exception as e:
-            return f"Error: {str(e)}"
-
-    @tool
-    def read_notes() -> str:
-        """Read the current content of the project's notes document."""
-        return get_project_notes(project.id)
-
-    @tool
-    def edit_notes(old_text: str, new_text: str) -> str:
-        """Edit the project's notes document. Replaces old_text with new_text in the note document."""
-        notes_path = DATA_DIR / "projects" / project.id / "notes.md"
-        try:
-            with open(notes_path, "r") as f:
-                content = f.read()
-
-            occurrence_count = content.count(old_text)
-            if occurrence_count == 0:
-                return f"Error: Could not find '{old_text}' in {notes_path} . No changes made."
-            elif occurrence_count > 1:
-                return (
-                    f"Error: Found {occurrence_count} matches for '{old_text}'. "
-                    "To avoid accidental changes, please provide more surrounding context "
-                    "to uniquely identify the block you want to replace."
-                )
-            else:
-                new_content = content.replace(old_text, new_text)
-                with open(notes_path, "w") as f:
-                    f.write(new_content)
-                return f"Successfully replaced the unique occurrence of text in {notes_path}."
-        except FileNotFoundError:
-            return f"Error: File not found at {notes_path}."
-        except Exception as e:
-            return f"Error: {str(e)}"
-
-    @tool
-    def overwrite_notes(content: str) -> str:
-        """Overwrite the text content of the project's notes document. Use to replace the content of the note file entirely with new text."""
-        try:
-            notes_path = DATA_DIR / "projects" / project.id / "notes.md"
-            with open(notes_path, "w", encoding="utf-8") as f:
-                f.write(f"\n{content}")
-            return "Notes appended successfully."
-        except Exception as e:
-            return f"Error: {str(e)}"
-
-    tools = [web_search, read_notes, edit_notes, overwrite_notes]
-
+    tools = create_project_tools(project)
     agent = create_agent(llm, tools)
 
     history = get_chat_history(session, chat_id)
@@ -177,14 +181,18 @@ async def stream_chat(
     )
     messages = [system_message] + history + [HumanMessage(content=query)]
 
-    user_msg = DBMessage(chat_id=chat_id, role="user", content=query)
+    start_new_idx = len(messages)
+
+    user_msg = DBMessage(chat_id=chat_id, role="user", type="text", content=query)
     session.add(user_msg)
     session.commit()
 
-    full_response = ""
+    final_state = None
     try:
         async for event in agent.astream_events({"messages": messages}, version="v2"):
             kind = event["event"]
+            name = event["name"]
+
             if kind == "on_chat_model_stream":
                 chunk = event["data"]["chunk"]  # type: ignore
                 if hasattr(chunk, "content_blocks") and chunk.content_blocks:
@@ -207,7 +215,6 @@ async def stream_chat(
                                 )
                         elif block.get("type") == "text" and block.get("text"):
                             content_text = block.get("text")
-                            full_response += str(content_text)
                             yield yield_func(
                                 json.dumps(
                                     {"type": "content", "content": str(content_text)}
@@ -220,7 +227,6 @@ async def stream_chat(
                             str(c.get("text", "")) if isinstance(c, dict) else str(c)
                             for c in content
                         )
-                    full_response += str(content)
                     yield yield_func(
                         json.dumps({"type": "content", "content": str(content)})
                     )
@@ -235,18 +241,99 @@ async def stream_chat(
             elif kind == "on_tool_end":
                 tool_name = event["name"]
                 yield yield_func(json.dumps({"type": "tool_end", "tool": tool_name}))
+            elif kind == "on_chain_end" and name == "LangGraph":
+                final_state = event["data"].get("output")
 
     except Exception as e:
         import traceback
 
         traceback.print_exc()
         error_msg = f"\n\nError generating response: {str(e)}"
-        full_response += error_msg
         yield yield_func(json.dumps({"type": "content", "content": error_msg}))
 
-    if full_response:
-        assistant_msg = DBMessage(
-            chat_id=chat_id, role="assistant", content=full_response
-        )
-        session.add(assistant_msg)
+    if final_state and "messages" in final_state:
+        new_messages = final_state["messages"][start_new_idx:]
+        for msg in new_messages:
+            if isinstance(msg, AIMessage):
+                content_val = msg.content
+                if isinstance(content_val, list):
+                    for block in content_val:
+                        if isinstance(block, dict):
+                            btype = block.get("type")
+                            if btype == "text" and block.get("text"):
+                                db_msg = DBMessage(
+                                    chat_id=chat_id,
+                                    role="assistant",
+                                    type="text",
+                                    content=block.get("text", ""),
+                                )
+                                session.add(db_msg)
+                            elif btype in ("reasoning", "thinking"):
+                                rtext = (
+                                    block.get("text")
+                                    or block.get("reasoning")
+                                    or block.get("thinking")
+                                )
+                                if rtext:
+                                    db_msg = DBMessage(
+                                        chat_id=chat_id,
+                                        role="assistant",
+                                        type="reasoning",
+                                        content=rtext,
+                                    )
+                                    session.add(db_msg)
+                elif isinstance(content_val, str) and content_val:
+                    db_msg = DBMessage(
+                        chat_id=chat_id,
+                        role="assistant",
+                        type="text",
+                        content=content_val,
+                    )
+                    session.add(db_msg)
+
+                if "reasoning" in msg.additional_kwargs:
+                    db_msg = DBMessage(
+                        chat_id=chat_id,
+                        role="assistant",
+                        type="reasoning",
+                        content=msg.additional_kwargs["reasoning"],
+                    )
+                    session.add(db_msg)
+
+                if msg.tool_calls:
+                    for tc in msg.tool_calls:
+                        db_msg = DBMessage(
+                            chat_id=chat_id,
+                            role="assistant",
+                            type="tool_call",
+                            name=tc.get("name"),
+                            parent_id=tc.get("id"),
+                            content=json.dumps(tc.get("args", {})),
+                        )
+                        session.add(db_msg)
+            elif isinstance(msg, ToolMessage):
+                db_msg = DBMessage(
+                    chat_id=chat_id,
+                    role="tool",
+                    type="tool_result",
+                    content=str(msg.content),
+                    parent_id=msg.tool_call_id,
+                )
+                session.add(db_msg)
+            elif isinstance(msg, SystemMessage):
+                db_msg = DBMessage(
+                    chat_id=chat_id,
+                    role="system",
+                    type="text",
+                    content=str(msg.content),
+                )
+                session.add(db_msg)
+            elif isinstance(msg, HumanMessage):
+                db_msg = DBMessage(
+                    chat_id=chat_id, role="user", type="text", content=str(msg.content)
+                )
+                session.add(db_msg)
         session.commit()
+    elif not final_state:
+        # In case of catastrophic failure where final_state wasn't reached, try to capture what we have
+        pass

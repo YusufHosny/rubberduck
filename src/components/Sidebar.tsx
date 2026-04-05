@@ -15,6 +15,7 @@ export default function Sidebar({ activeProjectId, setActiveProjectId }: { activ
   const [resources, setResources] = useState<Resource[]>([])
   const [isAddResourceOpen, setIsAddResourceOpen] = useState(false)
   const [isNewProjectOpen, setIsNewProjectOpen] = useState(false)
+  const [projectToDelete, setProjectToDelete] = useState<string | null>(null)
   const [newProjectName, setNewProjectName] = useState("")
 
   const fetchProjects = async () => {
@@ -59,9 +60,9 @@ export default function Sidebar({ activeProjectId, setActiveProjectId }: { activ
     })
   }
 
-  const handleDeleteProject = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
-    if (!confirm("Are you sure you want to delete this project?")) return
+  const handleDeleteProject = async (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    setProjectToDelete(null)
     const promise = api.projects.delete(id).then(() => {
       if (activeProjectId === id) setActiveProjectId(null)
       fetchProjects()
@@ -177,7 +178,7 @@ export default function Sidebar({ activeProjectId, setActiveProjectId }: { activ
                 variant="ghost"
                 size="icon"
                 className="h-8 w-8 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                onClick={(e) => handleDeleteProject(p.id, e)}
+                onClick={(e) => { e.stopPropagation(); setProjectToDelete(p.id); }}
               >
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
@@ -269,6 +270,21 @@ export default function Sidebar({ activeProjectId, setActiveProjectId }: { activ
           </Button>
         </LogViewer>
       </div>
+
+      <Dialog open={!!projectToDelete} onOpenChange={(open) => !open && setProjectToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Project</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 text-sm text-muted-foreground">
+            Are you sure you want to delete this project? All associated resources and chats will be permanently lost.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProjectToDelete(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={() => projectToDelete && handleDeleteProject(projectToDelete)}>Delete Project</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

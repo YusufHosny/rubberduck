@@ -16,14 +16,12 @@ export default function LogViewer({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (!isOpen) return
 
-    // Load history
     api.logs.history()
       .then(history => setLogs(history))
       .catch(console.error)
 
-    // Connect SSE
     const eventSource = new EventSource(api.logs.streamUrl())
-    
+
     eventSource.onmessage = (event) => {
       try {
         const logData: LogEntry = JSON.parse(event.data)
@@ -118,7 +116,7 @@ export default function LogViewer({ children }: { children: React.ReactNode }) {
           </div>
         </DialogHeader>
 
-        <div 
+        <div
           className="flex-1 bg-[#09090b] p-4 overflow-y-auto font-mono text-[11px] leading-relaxed relative"
           ref={containerRef}
           onScroll={handleScroll}

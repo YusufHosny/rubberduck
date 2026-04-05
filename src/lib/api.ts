@@ -26,12 +26,14 @@ export interface Chat {
 }
 
 export interface Message {
-  id?: string
+  id: string
   chat_id?: string
-  role: "user" | "assistant" | "system"
+  role: "user" | "assistant" | "system" | "tool"
+  type: "text" | "reasoning" | "tool_call" | "tool_result"
   content: string
+  name?: string
+  parent_id?: string
   created_at?: string
-  tools?: {name: string, input?: any, completed?: boolean}[]
 }
 
 export interface Notes {
@@ -72,14 +74,19 @@ class ApiClient {
 
   async initialize(retries = 3): Promise<void> {
     try {
-      const settingsStr = await invoke<string>("get_settings");
-      if (settingsStr) {
-        const settings = JSON.parse(settingsStr);
-        if (settings.primary_port) this.primaryPort = settings.primary_port;
-        if (settings.fallback_port) this.fallbackPort = settings.fallback_port;
+      if ('__TAURI_INTERNALS__' in window) {
+        const settingsStr = await invoke<string>("get_settings");
+        if (settingsStr) {
+          const settings = JSON.parse(settingsStr);
+          if (settings.primary_port) this.primaryPort = settings.primary_port;
+          if (settings.fallback_port) this.fallbackPort = settings.fallback_port;
+        }
+      }
+      else {
+        console.warn('__TAURI_INTERNALS__ Not Found. Probably on a dev environment, using default ports...');
       }
     } catch (e) {
-      console.warn("Failed to load settings via tauri, using default ports", e);
+      console.warn("Failed to load settings from Tauri:", e);
     }
 
     for (let i = 0; i < retries; i++) {
@@ -198,7 +205,7 @@ class ApiClient {
       getHistory: (projectId: string, chatId: string) =>
         this.fetch<Message[]>(`/projects/${projectId}/chats/${chatId}`),
       getTokens: (projectId: string, chatId: string) =>
-        this.fetch<{tokens: number}>(`/projects/${projectId}/chats/${chatId}/tokens`),
+        this.fetch<{ tokens: number }>(`/projects/${projectId}/chats/${chatId}/tokens`),
       update: (projectId: string, chatId: string, name: string) =>
         this.fetch<void>(`/projects/${projectId}/chats/${chatId}`, {
           method: "PUT",

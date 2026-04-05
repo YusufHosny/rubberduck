@@ -27,6 +27,8 @@ class MessageCreate(BaseModel):
 class MessageResponse(BaseModel):
     id: str
     role: str
+    type: str
     content: str
-    parent_id: Optional[str]
+    name: Optional[str] = None
+    parent_id: Optional[str] = None
     created_at: datetime

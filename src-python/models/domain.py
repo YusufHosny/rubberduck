@@ -46,8 +46,10 @@ class Chat(SQLModel, table=True):
 class Message(SQLModel, table=True):
     id: str = Field(default_factory=generate_uuid, primary_key=True)
     chat_id: str = Field(foreign_key="chat.id")
-    role: str  # 'user', 'assistant', 'system'
+    role: str  # 'user', 'assistant', 'system', 'tool'
+    type: str  # 'text', 'reasoning', 'tool_call', 'tool_result'
     content: str
+    name: Optional[str] = Field(default=None)
     parent_id: Optional[str] = Field(default=None)
     tokens_used: int = Field(default=0)
     cost: float = Field(default=0.0)

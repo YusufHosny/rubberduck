@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sse_starlette.sse import EventSourceResponse
-from sqlmodel import Session, select
+from sqlmodel import Session, column, select
 from pydantic import BaseModel
 
 from core.db import get_session
@@ -41,10 +41,27 @@ def get_chat_messages(
     if not chat or chat.project_id != project_id:
         raise HTTPException(status_code=404, detail="Chat not found")
 
-    messages = session.exec(
-        select(Message).where(Message.chat_id == chat_id).order_by(Message.created_at)
+    db_messages = session.exec(
+        select(Message).where(Message.chat_id == chat_id).order_by(column("created_at"))
     ).all()
-    return messages
+
+    result = []
+    for m in db_messages:
+        if m.role == "tool":
+            continue
+        result.append(
+            {
+                "id": m.id,
+                "role": m.role,
+                "type": m.type,
+                "content": m.content,
+                "name": m.name,
+                "parent_id": m.parent_id,
+                "created_at": m.created_at,
+            }
+        )
+
+    return result
 
 
 @router.get("/{project_id}/chats/{chat_id}/tokens")

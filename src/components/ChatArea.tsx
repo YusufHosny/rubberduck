@@ -1,27 +1,127 @@
 import { useState, useEffect, useRef } from "react"
-import { Send, Plus, Trash2, Edit2, Check, X, Loader2 } from "lucide-react"
+import { Send, Plus, Trash2, Edit2, Check, X, Loader2, MessageSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog"
 import { api, Chat, Message } from "@/lib/api"
 import { toast } from "sonner"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
-export interface ChatMessage extends Message {
-  reasoning?: string;
+function generateId() {
+  return Math.random().toString(36).substring(2, 9);
+}
+
+async function* parseChatStream(response: Response) {
+  if (!response.body) throw new Error("No response body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
+
+    let boundaryIndex;
+    while ((boundaryIndex = buffer.indexOf("\n\n")) >= 0) {
+      const chunk = buffer.slice(0, boundaryIndex).trim();
+      buffer = buffer.slice(boundaryIndex + 2);
+
+      const lines = chunk.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") return;
+          try {
+            yield JSON.parse(data);
+          } catch (e) {
+            // Ignore malformed JSON
+          }
+        }
+      }
+    }
+  }
+}
+
+function MessageBlock({ msg, completed }: { msg: Message, completed?: boolean }) {
+  if (msg.role === "user") {
+    return (
+      <div className="flex w-full justify-end mt-4">
+        <div className="flex gap-3 max-w-[85%]">
+          <div className="bg-primary text-primary-foreground rounded-2xl px-5 py-3 shadow-sm">
+            <div className="whitespace-pre-wrap font-sans text-sm">{msg.content}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.role === "system") {
+    return (
+      <div className="flex w-full justify-center mt-4">
+        <div className="bg-destructive/10 text-destructive border border-destructive/20 rounded-lg px-4 py-2 text-sm max-w-[85%]">
+          {msg.content}
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.type === "reasoning") {
+    const thinkingText = msg.content?.trim();
+    if (!thinkingText) return null;
+    return (
+      <div className="flex w-full justify-start mt-2">
+        <details className="text-xs text-muted-foreground bg-muted/30 p-2.5 rounded-md border border-border/50 max-w-[85%]">
+          <summary className="cursor-pointer font-mono font-medium select-none flex items-center gap-2">Thinking...</summary>
+          <div className="mt-2 whitespace-pre-wrap opacity-80 pl-4 border-l-2 border-primary/20">{thinkingText}</div>
+        </details>
+      </div>
+    );
+  }
+
+  if (msg.type === "tool_call") {
+    return (
+      <div className="flex w-full justify-start mt-2">
+        <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-md border border-border/50">
+          {completed ? <Check className="h-3 w-3 text-green-500" /> : <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
+          <span className="font-mono">{msg.name}</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (msg.type === "text" && msg.role === "assistant") {
+    const contentText = msg.content?.trim();
+    if (!contentText) return null;
+    return (
+      <div className="flex w-full justify-start mt-2">
+        <div className="prose prose-sm dark:prose-invert max-w-[85%] prose-p:leading-relaxed prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted/50 prose-pre:border overflow-x-hidden break-words">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            {contentText}
+          </ReactMarkdown>
+        </div>
+      </div>
+    );
+  }
+  
+  return null;
 }
 
 export default function ChatArea({ projectId }: { projectId: string }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([])
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [isWaiting, setIsWaiting] = useState(false)
   const [totalTokens, setTotalTokens] = useState(0)
   const [isEditingName, setIsEditingName] = useState(false)
   const [editNameValue, setEditNameValue] = useState("")
+  const [isChatSelectionOpen, setIsChatSelectionOpen] = useState(false)
+  const [chatToDelete, setChatToDelete] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortControllerRef = useRef<AbortController | null>(null)
@@ -44,7 +144,8 @@ export default function ChatArea({ projectId }: { projectId: string }) {
     if (!activeChatId) return
     try {
       const data = await api.projects.chats.getHistory(projectId, activeChatId)
-      setMessages(data || [])
+      const msgs = (data || []).map(m => ({ ...m, id: m.id || generateId(), completed: m.type === "tool_call" ? true : undefined }));
+      setMessages(msgs)
     } catch (e) { console.error(e) }
   }
 
@@ -91,13 +192,22 @@ export default function ChatArea({ projectId }: { projectId: string }) {
   }
 
   const handleDeleteChat = async () => {
-    if (!activeChatId) return
-    if (!confirm("Delete this chat?")) return
+    if (!chatToDelete) return
     try {
-      await api.projects.chats.delete(projectId, activeChatId)
-      setMessages([])
-      setActiveChatId(null)
-      fetchChats()
+      await api.projects.chats.delete(projectId, chatToDelete)
+      const updatedChats = chats.filter(c => c.id !== chatToDelete)
+      setChats(updatedChats)
+
+      if (activeChatId === chatToDelete) {
+        setMessages([])
+        if (updatedChats.length > 0) {
+          setActiveChatId(updatedChats[0].id)
+        } else {
+          setActiveChatId(null)
+          fetchChats()
+        }
+      }
+      setChatToDelete(null)
       toast.success("Chat deleted")
     } catch (e) {
       toast.error("Failed to delete chat")
@@ -133,7 +243,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
 
     const userMsg = input
     setInput("")
-    setMessages(prev => [...prev, { role: "user", content: userMsg }])
+    setMessages(prev => [...prev, { id: generateId(), role: "user", type: "text", content: userMsg }])
     setIsGenerating(true)
     setIsWaiting(true)
 
@@ -151,82 +261,48 @@ export default function ChatArea({ projectId }: { projectId: string }) {
         throw new Error(`API Error (${response.status})`)
       }
 
-      if (!response.body) throw new Error("No response body")
+      let firstChunkReceived = false;
 
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-
-      let assistantMsg = ""
-      let activeTools: { name: string, input?: any, completed?: boolean }[] = []
-
-      setMessages(prev => [...prev, { role: "assistant", content: "", tools: [] }])
-
-      let buffer = ""
-      let isDone = false
-      let firstChunkReceived = false
-
-      while (!isDone) {
-        const { value, done } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true }).replace(/\r/g, '')
-
-        let boundaryIndex
-        while ((boundaryIndex = buffer.indexOf("\n\n")) >= 0) {
-          const chunk = buffer.slice(0, boundaryIndex).trim()
-          buffer = buffer.slice(boundaryIndex + 2)
-
-          const lines = chunk.split("\n")
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              if (!firstChunkReceived) {
-                setIsWaiting(false)
-                firstChunkReceived = true
-              }
-
-              const data = line.slice(6)
-              if (data === "[DONE]") {
-                isDone = true
-                break
-              }
-
-              try {
-                const parsed = JSON.parse(data)
-                if (parsed.type === "content") {
-                  assistantMsg += parsed.content
-                } else if (parsed.type === "tool_start") {
-                  activeTools.push({ name: parsed.tool, input: parsed.input, completed: false })
-                } else if (parsed.type === "tool_end") {
-                  let toolIndex = -1;
-                  for (let i = activeTools.length - 1; i >= 0; i--) {
-                    if (activeTools[i].name === parsed.tool) {
-                      toolIndex = i;
-                      break;
-                    }
-                  }
-                  if (toolIndex >= 0) {
-                    activeTools[toolIndex].completed = true
-                  }
-                }
-
-                setMessages(prev => {
-                  const newMsgs = [...prev]
-                  newMsgs[newMsgs.length - 1] = {
-                    ...newMsgs[newMsgs.length - 1],
-                    content: assistantMsg,
-                    tools: [...activeTools]
-                  }
-                  return newMsgs
-                })
-              } catch (e) { }
-            }
-          }
+      for await (const parsed of parseChatStream(response)) {
+        if (!firstChunkReceived) {
+          setIsWaiting(false);
+          firstChunkReceived = true;
         }
+
+        setMessages(prev => {
+          const newMsgs = [...prev];
+
+          if (parsed.type === "content") {
+             const last = newMsgs[newMsgs.length - 1];
+             if (last && last.role === "assistant" && last.type === "text") {
+                 last.content += parsed.content;
+             } else {
+                 newMsgs.push({ id: generateId(), role: "assistant", type: "text", content: parsed.content });
+             }
+          } else if (parsed.type === "reasoning") {
+             const last = newMsgs[newMsgs.length - 1];
+             if (last && last.role === "assistant" && last.type === "reasoning") {
+                 last.content += parsed.content;
+             } else {
+                 newMsgs.push({ id: generateId(), role: "assistant", type: "reasoning", content: parsed.content });
+             }
+          } else if (parsed.type === "tool_start") {
+             newMsgs.push({ id: generateId(), role: "assistant", type: "tool_call", name: parsed.tool, content: JSON.stringify(parsed.input || {}) });
+          } else if (parsed.type === "tool_end") {
+             const index = newMsgs.map(m => m.type === "tool_call" && m.name === parsed.tool).lastIndexOf(true);
+             if (index !== -1) {
+                newMsgs[index] = { ...newMsgs[index], completed: true } as any;
+             }
+          }
+
+          return newMsgs;
+        });
       }
+
     } catch (e: any) {
       if (e.name !== 'AbortError') {
         console.error("Chat error:", e)
-        setMessages(prev => [...prev, { role: "system", content: `Error: ${e.message}` }])
+        setMessages(prev => [...prev, { id: generateId(), role: "system", type: "text", content: `Error: ${e.message}` }])
       }
     } finally {
       setIsGenerating(false)
@@ -259,15 +335,13 @@ export default function ChatArea({ projectId }: { projectId: string }) {
             </div>
           ) : (
             <div className="flex items-center gap-1">
-              <select
-                className="text-sm border-none bg-transparent focus:ring-0 cursor-pointer outline-none font-medium truncate max-w-[200px]"
-                value={activeChatId || ""}
-                onChange={(e) => setActiveChatId(e.target.value)}
+              <Button
+                variant="ghost"
+                className="text-sm font-medium truncate max-w-[200px] h-8 px-2"
+                onClick={() => setIsChatSelectionOpen(true)}
               >
-                {chats.map(c => (
-                  <option key={c.id} value={c.id}>{c.name}</option>
-                ))}
-              </select>
+                {chats.find(c => c.id === activeChatId)?.name || "Select Chat"}
+              </Button>
               {activeChatId && (
                 <>
                   <Button variant="ghost" size="icon" className="h-6 w-6 ml-1 opacity-50 hover:opacity-100" onClick={() => {
@@ -279,7 +353,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
                   }}>
                     <Edit2 className="h-3 w-3" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-50 hover:opacity-100 hover:text-destructive" onClick={handleDeleteChat}>
+                  <Button variant="ghost" size="icon" className="h-6 w-6 opacity-50 hover:opacity-100 hover:text-destructive" onClick={() => setChatToDelete(activeChatId)}>
                     <Trash2 className="h-3 w-3" />
                   </Button>
                 </>
@@ -304,61 +378,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
                 Send a message to start researching.
               </div>
             ) : (
-              messages.map((msg, i) => (
-                <div key={i} className={`flex w-full ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                  {msg.role === "user" ? (
-                    <div className="flex gap-3 max-w-[85%]">
-                      <div className="bg-primary text-primary-foreground rounded-2xl px-5 py-3 shadow-sm">
-                        <div className="whitespace-pre-wrap font-sans text-sm">{msg.content}</div>
-                      </div>
-                    </div>
-                  ) : msg.role === "system" ? (
-                    <div className="w-full flex justify-center">
-                      <div className="bg-destructive/10 text-destructive border border-destructive/20 rounded-lg px-4 py-2 text-sm max-w-[85%]">
-                        {msg.content}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex gap-4 w-full">
-                      <div className="flex-1 min-w-0 space-y-3">
-                        {msg.tools && msg.tools.length > 0 && (
-                          <div className="flex flex-col gap-1.5 mb-3">
-                            {msg.tools.map((t, idx) => (
-                              <div key={idx} className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-md w-fit border border-border/50">
-                                {t.completed ? <Check className="h-3 w-3 text-green-500" /> : <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
-                                <span className="font-mono">{t.name}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {(() => {
-                          const thinkingText = msg.reasoning?.trim();
-                          const contentText = msg.content.trim();
-
-                          return (
-                            <>
-                              {thinkingText && (<><h1>AAAAAAAAAAAAAa</h1>
-                                <details className="mb-3 text-xs text-muted-foreground bg-muted/30 p-2.5 rounded-md border border-border/50 max-w-full">
-                                  <summary className="cursor-pointer font-mono font-medium select-none flex items-center gap-2">Thinking...</summary>
-                                  <div className="mt-2 whitespace-pre-wrap opacity-80 pl-4 border-l-2 border-primary/20">{thinkingText}</div>
-                                </details></>
-                              )}
-                              {contentText && (
-                                <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted/50 prose-pre:border overflow-x-hidden w-full break-words">
-                                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                    {contentText}
-                                  </ReactMarkdown>
-                                </div>
-                              )}
-                            </>
-                          )
-                        })()}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ))
+              messages.map((msg) => <MessageBlock key={msg.id} msg={msg} completed={(msg as any).completed} />)
             )}
 
             {isWaiting && (
@@ -408,6 +428,49 @@ export default function ChatArea({ projectId }: { projectId: string }) {
           </div>
         </div>
       </div>
+
+      <Dialog open={isChatSelectionOpen} onOpenChange={setIsChatSelectionOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Switch Chat</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-2 py-4">
+            <ScrollArea className="h-[300px] pr-4">
+              <div className="grid gap-1">
+                {chats.map(c => (
+                  <Button
+                    key={c.id}
+                    variant={activeChatId === c.id ? "secondary" : "ghost"}
+                    className="justify-start font-normal truncate h-10 w-full"
+                    onClick={() => {
+                      setActiveChatId(c.id);
+                      setIsChatSelectionOpen(false);
+                    }}
+                  >
+                    <MessageSquare className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{c.name}</span>
+                  </Button>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!chatToDelete} onOpenChange={(open) => !open && setChatToDelete(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete Chat</DialogTitle>
+          </DialogHeader>
+          <div className="py-4 text-sm text-muted-foreground">
+            Are you sure you want to delete this chat? All messages and history will be permanently lost.
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setChatToDelete(null)}>Cancel</Button>
+            <Button variant="destructive" onClick={handleDeleteChat}>Delete Chat</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

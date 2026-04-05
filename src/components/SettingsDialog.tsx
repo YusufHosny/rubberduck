@@ -17,7 +17,7 @@ const CONFIG = {
   defaults: {
     provider: "vertexai",
     models: {
-      vertexai: "gemini-3-flash",
+      vertexai: "gemini-3-flash-preview",
       openai: "gpt-5-mini",
       ollama: "llama3",
     },
@@ -36,7 +36,7 @@ const CONFIG = {
   },
   modelOptions: {
     vertexai: [
-      { id: "gemini-3-flash", name: "Gemini 3.0 Flash" },
+      { id: "gemini-3-flash-preview", name: "Gemini 3.0 Flash" },
       { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro" },
     ],
     openai: [
@@ -254,11 +254,11 @@ export default function SettingsDialog({ children }: { children: React.ReactNode
                   <Label>Debug Logging</Label>
                   <p className="text-[10px] text-muted-foreground leading-tight">Enable detailed backend logs (requires restart to fully apply in some areas).</p>
                 </div>
-                <input 
-                  type="checkbox" 
+                <input
+                  type="checkbox"
                   className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                   checked={settings.debug_logging || false}
-                  onChange={(e) => setSettings({...settings, debug_logging: e.target.checked})}
+                  onChange={(e) => setSettings({ ...settings, debug_logging: e.target.checked })}
                 />
               </div>
             </div>

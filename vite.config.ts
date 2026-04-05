@@ -5,8 +5,24 @@ import path from "path";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
+const muteReactDevtoolsSourcemapError = () => {
+  return {
+    name: 'mute-react-devtools-sourcemap-error',
+    configureServer(server: any) {
+      server.middlewares.use((req: any, res: any, next: any) => {
+        if (req.url?.includes('installHook.js.map')) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end('{"version": 3, "file": "installHook.js", "sources": [], "names": [], "mappings": ""}');
+          return;
+        }
+        next();
+      });
+    },
+  };
+};
+
 export default defineConfig(async () => ({
-  plugins: [react()],
+  plugins: [react(), muteReactDevtoolsSourcemapError()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
