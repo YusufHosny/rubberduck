@@ -53,6 +53,16 @@ export interface Settings {
   ollama_url: string
   primary_port: number
   fallback_port: number
+  debug_logging: boolean
+}
+
+export interface LogEntry {
+  time: string
+  level: string
+  message: string
+  name: string
+  file: string
+  line: number
 }
 
 class ApiClient {
@@ -224,6 +234,11 @@ class ApiClient {
           body: JSON.stringify({ content }),
         }),
     },
+  };
+
+  public readonly logs = {
+    history: () => this.fetch<LogEntry[]>("/logs/history"),
+    streamUrl: () => this.getUrl("/logs/stream"),
   };
 }
 

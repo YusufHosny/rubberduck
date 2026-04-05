@@ -18,3 +18,4 @@ langchain-ollama
 pydantic-settings
 langgraph
 duckduckgo-search
+loguru

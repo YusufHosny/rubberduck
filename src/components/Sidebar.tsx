@@ -1,4 +1,4 @@
-import { PlusCircle, Folder, Settings, FileText, Link as LinkIcon, Trash2 } from "lucide-react"
+import { PlusCircle, Folder, Settings, FileText, Link as LinkIcon, Trash2, TerminalSquare } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog"
@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useState, useEffect } from "react"
 import SettingsDialog from "@/components/SettingsDialog"
+import LogViewer from "@/components/LogViewer"
 import { api, Project, Resource } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -254,13 +255,19 @@ export default function Sidebar({ activeProjectId, setActiveProjectId }: { activ
         )}
       </ScrollArea>
 
-      <div className="p-2 border-t shrink-0">
+      <div className="p-2 border-t shrink-0 space-y-1">
         <SettingsDialog>
           <Button variant="ghost" className="w-full justify-start gap-2 h-9 text-sm text-muted-foreground">
             <Settings className="h-4 w-4" />
             Global Settings
           </Button>
         </SettingsDialog>
+        <LogViewer>
+          <Button variant="ghost" className="w-full justify-start gap-2 h-9 text-sm text-muted-foreground">
+            <TerminalSquare className="h-4 w-4" />
+            Developer Logs
+          </Button>
+        </LogViewer>
       </div>
     </div>
   )

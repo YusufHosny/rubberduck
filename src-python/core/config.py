@@ -21,6 +21,7 @@ class Settings(BaseModel):
     ollama_url: str = "http://localhost:11434"
     primary_port: int = 38438
     fallback_port: int = 38439
+    debug_logging: bool = False
 
 
 class SettingsManager:

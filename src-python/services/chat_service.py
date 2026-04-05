@@ -2,9 +2,9 @@ import json
 from typing import AsyncGenerator
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_core.tools import tool
-from sqlmodel import Session
+from sqlmodel import Session, column, select
 from duckduckgo_search import DDGS
-from langgraph.prebuilt import create_react_agent
+from langchain.agents import create_agent
 
 from core.db import DATA_DIR
 from models.domain import Message as DBMessage, Project
@@ -46,12 +46,9 @@ def get_project_context(project_id: str, query: str, total_tokens: int) -> str:
 
 
 def get_chat_history(session: Session, chat_id: str) -> list:
-    db_messages = (
-        session.query(DBMessage)
-        .filter(DBMessage.chat_id == chat_id)
-        .order_by(DBMessage.created_at)
-        .all()
-    )
+    db_messages = session.exec(
+        select(DBMessage).filter_by(chat_id=chat_id).order_by(column("created_at"))
+    ).all()
 
     langchain_history = []
     for msg in db_messages:
@@ -67,8 +64,20 @@ def generate_chat_name(project_id: str, chat_id: str, first_message: str):
     llm = get_llm()
     prompt = f"Summarize this message into a short 2 to 4 word chat title. Return ONLY the title text, nothing else. Message: {first_message}"
     try:
-        response = llm.invoke(prompt)
-        title = str(response.content).strip().strip('"').strip("'")
+        content = llm.invoke(prompt).content
+        if isinstance(content, str):
+            title = str(content)
+        elif isinstance(content, list) and len(content) == 1:
+            if isinstance(content[0], str):
+                title = content[0]
+            else:
+                if not content[0]["type"] == "text":
+                    raise Exception("Invalid chat name response type")
+                title = str(content[0]["text"])
+        else:
+            raise Exception("Unexpected chat name response format")
+
+        title = title.strip().strip('"').strip("'")
 
         from core.db import engine
         from sqlmodel import Session
@@ -120,19 +129,46 @@ async def stream_chat(
         return get_project_notes(project.id)
 
     @tool
-    def append_notes(content: str) -> str:
-        """Append text to the end of the project's notes document. Use to save important findings."""
+    def edit_notes(old_text: str, new_text: str) -> str:
+        """Edit the project's notes document. Replaces old_text with new_text in the note document."""
+        notes_path = DATA_DIR / "projects" / project.id / "notes.md"
+        try:
+            with open(notes_path, "r") as f:
+                content = f.read()
+
+            occurrence_count = content.count(old_text)
+            if occurrence_count == 0:
+                return f"Error: Could not find '{old_text}' in {notes_path} . No changes made."
+            elif occurrence_count > 1:
+                return (
+                    f"Error: Found {occurrence_count} matches for '{old_text}'. "
+                    "To avoid accidental changes, please provide more surrounding context "
+                    "to uniquely identify the block you want to replace."
+                )
+            else:
+                new_content = content.replace(old_text, new_text)
+                with open(notes_path, "w") as f:
+                    f.write(new_content)
+                return f"Successfully replaced the unique occurrence of text in {notes_path}."
+        except FileNotFoundError:
+            return f"Error: File not found at {notes_path}."
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    @tool
+    def overwrite_notes(content: str) -> str:
+        """Overwrite the text content of the project's notes document. Use to replace the content of the note file entirely with new text."""
         try:
             notes_path = DATA_DIR / "projects" / project.id / "notes.md"
-            with open(notes_path, "a", encoding="utf-8") as f:
+            with open(notes_path, "w", encoding="utf-8") as f:
                 f.write(f"\n{content}")
             return "Notes appended successfully."
         except Exception as e:
             return f"Error: {str(e)}"
 
-    tools = [web_search, read_notes, append_notes]
+    tools = [web_search, read_notes, edit_notes, overwrite_notes]
 
-    agent = create_react_agent(llm, tools)
+    agent = create_agent(llm, tools)
 
     history = get_chat_history(session, chat_id)
 
@@ -150,8 +186,34 @@ async def stream_chat(
         async for event in agent.astream_events({"messages": messages}, version="v2"):
             kind = event["event"]
             if kind == "on_chat_model_stream":
-                chunk = event["data"]["chunk"]
-                if chunk.content:
+                chunk = event["data"]["chunk"]  # type: ignore
+                if hasattr(chunk, "content_blocks") and chunk.content_blocks:
+                    for block in chunk.content_blocks:
+                        if block.get("type") in ("reasoning", "thinking"):
+                            reason_text = (
+                                block.get("text")
+                                or block.get("reasoning")
+                                or block.get("thinking")
+                                or ""
+                            )
+                            if reason_text:
+                                yield yield_func(
+                                    json.dumps(
+                                        {
+                                            "type": "reasoning",
+                                            "content": str(reason_text),
+                                        }
+                                    )
+                                )
+                        elif block.get("type") == "text" and block.get("text"):
+                            content_text = block.get("text")
+                            full_response += str(content_text)
+                            yield yield_func(
+                                json.dumps(
+                                    {"type": "content", "content": str(content_text)}
+                                )
+                            )
+                elif chunk.content:
                     content = chunk.content
                     if isinstance(content, list):
                         content = "".join(

@@ -247,6 +247,21 @@ export default function SettingsDialog({ children }: { children: React.ReactNode
                 onChange={e => setSettings({ ...settings, rag_threshold: parseInt(e.target.value) || CONFIG.defaults.ragThreshold })}
               />
             </div>
+
+            <div className="grid gap-2 mt-2 pt-4 border-t">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label>Debug Logging</Label>
+                  <p className="text-[10px] text-muted-foreground leading-tight">Enable detailed backend logs (requires restart to fully apply in some areas).</p>
+                </div>
+                <input 
+                  type="checkbox" 
+                  className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                  checked={settings.debug_logging || false}
+                  onChange={(e) => setSettings({...settings, debug_logging: e.target.checked})}
+                />
+              </div>
+            </div>
           </div>
         )}
 

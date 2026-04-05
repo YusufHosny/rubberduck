@@ -8,16 +8,18 @@ import { toast } from "sonner"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 
+export interface ChatMessage extends Message {
+  reasoning?: string;
+}
+
 export default function ChatArea({ projectId }: { projectId: string }) {
   const [chats, setChats] = useState<Chat[]>([])
   const [activeChatId, setActiveChatId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<Message[]>([])
+  const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState("")
   const [isGenerating, setIsGenerating] = useState(false)
   const [isWaiting, setIsWaiting] = useState(false)
   const [totalTokens, setTotalTokens] = useState(0)
-
-  // Rename state
   const [isEditingName, setIsEditingName] = useState(false)
   const [editNameValue, setEditNameValue] = useState("")
 
@@ -42,7 +44,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
     if (!activeChatId) return
     try {
       const data = await api.projects.chats.getHistory(projectId, activeChatId)
-      setMessages(data)
+      setMessages(data || [])
     } catch (e) { console.error(e) }
   }
 
@@ -80,8 +82,8 @@ export default function ChatArea({ projectId }: { projectId: string }) {
   const createNewChat = async () => {
     try {
       const newChat = await api.projects.chats.create(projectId, "New Chat")
-      setActiveChatId(newChat.id)
       setMessages([])
+      setActiveChatId(newChat.id)
       setChats([newChat, ...chats])
     } catch (e) {
       toast.error("Failed to create chat")
@@ -93,8 +95,8 @@ export default function ChatArea({ projectId }: { projectId: string }) {
     if (!confirm("Delete this chat?")) return
     try {
       await api.projects.chats.delete(projectId, activeChatId)
-      setActiveChatId(null)
       setMessages([])
+      setActiveChatId(null)
       fetchChats()
       toast.success("Chat deleted")
     } catch (e) {
@@ -331,17 +333,16 @@ export default function ChatArea({ projectId }: { projectId: string }) {
                         )}
 
                         {(() => {
-                          const thinkMatch = msg.content.match(/<think>([\s\S]*?)(?:<\/think>|$)/);
-                          const thinkingText = thinkMatch ? thinkMatch[1].trim() : null;
-                          const contentText = msg.content.replace(/<think>[\s\S]*?(?:<\/think>|$)/g, '').trim();
+                          const thinkingText = msg.reasoning?.trim();
+                          const contentText = msg.content.trim();
 
                           return (
                             <>
-                              {thinkingText && (
+                              {thinkingText && (<><h1>AAAAAAAAAAAAAa</h1>
                                 <details className="mb-3 text-xs text-muted-foreground bg-muted/30 p-2.5 rounded-md border border-border/50 max-w-full">
                                   <summary className="cursor-pointer font-mono font-medium select-none flex items-center gap-2">Thinking...</summary>
                                   <div className="mt-2 whitespace-pre-wrap opacity-80 pl-4 border-l-2 border-primary/20">{thinkingText}</div>
-                                </details>
+                                </details></>
                               )}
                               {contentText && (
                                 <div className="prose prose-sm dark:prose-invert max-w-none prose-p:leading-relaxed prose-pre:whitespace-pre-wrap prose-pre:break-words prose-pre:bg-muted/50 prose-pre:border overflow-x-hidden w-full break-words">

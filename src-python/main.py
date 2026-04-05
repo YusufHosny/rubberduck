@@ -4,14 +4,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
-import logging
 
 from core.db import init_db, DATA_DIR
 from core.config import settings_manager
-from api.routes import projects, resources, chat, settings
+from core.logger import setup_logging
+from loguru import logger
+from api.routes import projects, resources, chat, settings, logs
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+setup_logging()
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing database...")
     init_db()
     yield
+    # no cleanup
     pass
 
 
@@ -37,11 +38,12 @@ app.include_router(settings.router)
 app.include_router(projects.router)
 app.include_router(resources.router)
 app.include_router(chat.router)
+app.include_router(logs.router)
 
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "data_dir": str(DATA_DIR), "verify_rubberduck": True }
+    return {"status": "ok", "data_dir": str(DATA_DIR), "verify_rubberduck": True}
 
 
 def is_port_in_use(port: int) -> bool:

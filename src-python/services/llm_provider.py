@@ -15,7 +15,7 @@ class ProviderFactory:
             from langchain_openai import ChatOpenAI
 
             return ChatOpenAI(
-                model=model_name, api_key=settings.openai_key, temperature=0.3
+                model=model_name, api_key=settings.openai_key, temperature=0.3 # type: ignore
             )
 
         elif provider == "vertexai":
@@ -27,6 +27,9 @@ class ProviderFactory:
                 project=settings.vertex_project,
                 location=settings.vertex_location,
                 vertexai=True,
+
+                thinking_level='high',
+                include_thoughts=True,
             )
 
         elif provider == "ollama":
