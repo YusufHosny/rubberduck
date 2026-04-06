@@ -59,7 +59,7 @@ if __name__ == "__main__":
     port_to_use = primary_port
     if is_port_in_use(primary_port):
         if is_port_in_use(fallback_port):
-            print(
+            logger.error(
                 f"Both primary ({primary_port}) and fallback ({fallback_port}) ports are in use. Exiting."
             )
             exit(1)

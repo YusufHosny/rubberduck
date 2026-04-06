@@ -1,4 +1,9 @@
 import logging
+from typing import Any, Dict, List, Optional, Union
+from uuid import UUID
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
+from langchain_core.messages import BaseMessage
 import sys
 import json
 import queue
@@ -19,14 +24,105 @@ class InterceptHandler(logging.Handler):
         except ValueError:
             level = record.levelno
 
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
+        frame, depth = logging.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
             frame = frame.f_back
             depth += 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
         )
+
+
+class LoguruCallbackHandler(BaseCallbackHandler):
+    def on_llm_start(
+        self,
+        serialized: Dict[str, Any],
+        prompts: List[str],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        logger.debug(f"LLM Started (run_id={run_id}): {prompts}")
+
+    def on_chat_model_start(
+        self,
+        serialized: Dict[str, Any],
+        messages: List[List[BaseMessage]],
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        try:
+            msgs_repr = "\n".join(
+                [str([m.content for m in msg_list]) for msg_list in messages]
+            )
+            logger.debug(f"Chat Model Started (run_id={run_id}):\n{msgs_repr}")
+        except Exception:
+            logger.debug(f"Chat Model Started (run_id={run_id}): {messages}")
+
+    def on_llm_end(
+        self,
+        response: LLMResult,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        logger.debug(f"LLM Ended (run_id={run_id}): {response.generations}")
+
+    def on_llm_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        logger.error(f"LLM Error (run_id={run_id}): {error}")
+
+    def on_tool_start(
+        self,
+        serialized: Dict[str, Any],
+        input_str: str,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        inputs: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> Any:
+        tool_name = (
+            serialized.get("name", "Unknown Tool") if serialized else "Unknown Tool"
+        )
+        logger.debug(f"Tool Started ({tool_name}): {inputs or input_str}")
+
+    def on_tool_end(
+        self,
+        output: Any,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        logger.debug(f"Tool Ended: {output}")
+
+    def on_tool_error(
+        self,
+        error: BaseException,
+        *,
+        run_id: UUID,
+        parent_run_id: Optional[UUID] = None,
+        **kwargs: Any,
+    ) -> Any:
+        logger.error(f"Tool Error: {error}")
 
 
 class LogBroadcaster:
@@ -50,7 +146,6 @@ class LogBroadcaster:
 
         log_str = json.dumps(log_data)
 
-        # Put to all listeners, but handle cases where queue is full
         dead_listeners = []
         for q in list(self.listeners):
             try:
@@ -85,10 +180,8 @@ def setup_logging():
     settings = settings_manager.get()
     log_level = "DEBUG" if settings.debug_logging else "INFO"
 
-    # Remove all existing sinks
     logger.remove()
 
-    # 1. Console Logger
     logger.add(
         sys.stderr,
         level=log_level,
@@ -96,7 +189,6 @@ def setup_logging():
         format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
     )
 
-    # 2. File Logger (Standard Text)
     logger.add(
         LOG_DIR / "sidecar.log",
         rotation="10 MB",
@@ -105,13 +197,11 @@ def setup_logging():
         format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
     )
 
-    # 3. JSON Logger (For API/Broadcaster)
     logger.add(broadcaster.sink, level=log_level)
 
-    # Intercept standard library logging
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
-    # Optional: silence extremely noisy loggers
+    noisy_level = logging.INFO if log_level == "DEBUG" else logging.WARNING
     for noisy in [
         "uvicorn.access",
         "httpx",
@@ -119,9 +209,8 @@ def setup_logging():
         "sse_starlette",
         "sse_starlette.sse",
     ]:
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+        logging.getLogger(noisy).setLevel(noisy_level)
 
-    # Intercept all existing loggers
     for name in logging.root.manager.loggerDict.keys():
         _logger = logging.getLogger(name)
         _logger.handlers = [InterceptHandler()]

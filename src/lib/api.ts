@@ -31,6 +31,7 @@ export interface Message {
   role: "user" | "assistant" | "system" | "tool"
   type: "text" | "reasoning" | "tool_call" | "tool_result"
   content: string
+  inprogress?: boolean
   name?: string
   parent_id?: string
   created_at?: string
@@ -92,7 +93,7 @@ class ApiClient {
     for (let i = 0; i < retries; i++) {
       try {
         const url = `http://localhost:${this.primaryPort}`;
-        const res = await fetch(`${url}/health`);
+        const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) });
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           if (data.verify_rubberduck === true) {
@@ -101,12 +102,13 @@ class ApiClient {
           }
         }
       } catch (e) {
-        // Fall through
+        console.warn('Failed to reach python service on primary port. Retrying...')
       }
 
+      console.warn('Failed to reach python service on primary port. Attempting secondary port...')
       try {
         const url = `http://localhost:${this.fallbackPort}`;
-        const res = await fetch(`${url}/health`);
+        const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) });
         if (res.ok) {
           const data = await res.json().catch(() => ({}));
           if (data.verify_rubberduck === true) {
@@ -115,7 +117,8 @@ class ApiClient {
           }
         }
       } catch (e) {
-        // Fall through
+        console.warn('Failed to reach python service on secondary port. Retrying...')
+
       }
 
       if (i < retries - 1) {

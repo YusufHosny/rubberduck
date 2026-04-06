@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Request, BackgroundTasks
 from sse_starlette.sse import EventSourceResponse
 from sqlmodel import Session, column, select
@@ -8,6 +9,9 @@ from models.domain import Project, Chat, Message
 from models.schemas import ChatCreate, MessageCreate
 from services.chat_service import stream_chat, generate_chat_name
 from utils.parser import count_tokens
+
+# Store strong references to background tasks to prevent premature garbage collection
+_background_tasks = set()
 
 router = APIRouter(prefix="/projects", tags=["chat"])
 
@@ -107,9 +111,11 @@ async def send_message(
         return content
 
     if chat.name == "New Chat":
-        background_tasks.add_task(
-            generate_chat_name, project_id, chat_id, payload.content
+        task = asyncio.create_task(
+            asyncio.to_thread(generate_chat_name, project_id, chat_id, payload.content)
         )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     return EventSourceResponse(
         stream_chat(

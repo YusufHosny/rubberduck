@@ -1,3 +1,4 @@
+from loguru import logger
 import json
 from typing import AsyncGenerator
 from langchain_core.messages import (
@@ -39,7 +40,7 @@ def get_project_context(project_id: str, query: str, total_tokens: int) -> str:
             )
             return context
         except Exception as e:
-            print(f"Error during RAG retrieval: {e}")
+            logger.error(f"Error during RAG retrieval: {e}")
             return "No context retrieved due to an error."
     else:
         context_file = DATA_DIR / "projects" / project_id / "_consolidated_context.txt"
@@ -114,21 +115,20 @@ def get_chat_history(session: Session, chat_id: str) -> list:
             elif msg.role == "system":
                 langchain_history.append(SystemMessage(content=msg.content))
         except Exception as e:
-            print(f"Error parsing message {msg.id}: {e}")
+            logger.error(f"Error parsing message {msg.id}: {e}")
 
     flush_ai_message()
     return langchain_history
 
 
 def generate_chat_name(project_id: str, chat_id: str, first_message: str):
-    llm = get_llm()
+    llm = get_llm(max_tokens=15, thinking_level=None, include_thoughts=False)
     prompt = f"Summarize this message into a short 2 to 4 word chat title. Return ONLY the title text, nothing else. Message: {first_message}"
     try:
         content = llm.invoke(prompt).content
         if isinstance(content, str):
             title = str(content)
         elif isinstance(content, list) and len(content) >= 1:
-            # Safely handle list of dicts or list of strings
             first_block = content[0]
             if isinstance(first_block, str):
                 title = first_block
@@ -139,7 +139,11 @@ def generate_chat_name(project_id: str, chat_id: str, first_message: str):
         else:
             title = "New Chat"
 
-        title = title.strip().strip('"').strip("'")
+        title = title.strip().strip('"').strip("'").strip()
+
+        if title.lower().startswith("title:"):
+            title = title[6:].strip()
+
         if not title:
             title = "New Chat"
 
@@ -154,8 +158,9 @@ def generate_chat_name(project_id: str, chat_id: str, first_message: str):
                 chat.name = title
                 session.add(chat)
                 session.commit()
+                logger.info(f"Chat {chat_id} name updated to: {title}")
     except Exception as e:
-        print(f"Error generating chat name: {e}")
+        logger.error(f"Error generating chat name: {e}")
 
 
 async def stream_chat(
@@ -245,9 +250,7 @@ async def stream_chat(
                 final_state = event["data"].get("output")
 
     except Exception as e:
-        import traceback
-
-        traceback.print_exc()
+        logger.exception(f"Error generating response: {e}")
         error_msg = f"\n\nError generating response: {str(e)}"
         yield yield_func(json.dumps({"type": "content", "content": error_msg}))
 

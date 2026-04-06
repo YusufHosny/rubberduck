@@ -68,7 +68,7 @@ def create_project_tools(project: Project):
             notes_path = DATA_DIR / "projects" / project.id / "notes.md"
             with open(notes_path, "w", encoding="utf-8") as f:
                 f.write(f"\n{content}")
-            return "Notes appended successfully."
+            return "Notes overwritten successfully."
         except Exception as e:
             return f"Error: {str(e)}"
 

@@ -1,3 +1,4 @@
+from loguru import logger
 import json
 from pathlib import Path
 from pydantic import BaseModel
@@ -36,7 +37,7 @@ class SettingsManager:
                     data = json.load(f)
                     return Settings(**data)
             except Exception as e:
-                print(f"Error loading settings: {e}")
+                logger.error(f"Error loading settings: {e}")
 
         default_settings = Settings()
         self._save(default_settings)

@@ -1,3 +1,4 @@
+from loguru import logger
 import os
 from typing import Optional
 from sqlmodel import Session, select
@@ -108,7 +109,7 @@ def delete_resource_data(
         collection = vectorstore._collection
         collection.delete(where={"resource_id": resource.id})
     except Exception as e:
-        print(f"Error deleting vectors for {resource.id}: {e}")
+        logger.error(f"Error deleting vectors for {resource.id}: {e}")
 
     if resource.file_path and os.path.exists(resource.file_path):
         os.remove(resource.file_path)
@@ -159,4 +160,4 @@ def _rebuild_consolidated_context(session: Session, project_id: str):
 
             _append_to_consolidated_context(project_id, res.name, text)
         except Exception as e:
-            print(f"Error rebuilding context for {res.id}: {e}")
+            logger.error(f"Error rebuilding context for {res.id}: {e}")

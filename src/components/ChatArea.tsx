@@ -75,8 +75,15 @@ function MessageBlock({ msg, completed }: { msg: Message, completed?: boolean })
     return (
       <div className="flex w-full justify-start mt-2">
         <details className="text-xs text-muted-foreground bg-muted/30 p-2.5 rounded-md border border-border/50 max-w-[85%]">
-          <summary className="cursor-pointer font-mono font-medium select-none flex items-center gap-2">Thinking...</summary>
-          <div className="mt-2 whitespace-pre-wrap opacity-80 pl-4 border-l-2 border-primary/20">{thinkingText}</div>
+          <summary className="cursor-pointer font-mono font-medium select-none flex items-center gap-2">
+            <span className="font-mono">Thinking</span>
+            {completed ? <Check className="h-3 w-3 text-green-500" /> : <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
+          </summary>
+          <div className="mt-2 whitespace-pre-wrap opacity-80 pl-4 border-l-2 border-primary/20">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {thinkingText}
+            </ReactMarkdown>
+          </div>
         </details>
       </div>
     );
@@ -86,8 +93,8 @@ function MessageBlock({ msg, completed }: { msg: Message, completed?: boolean })
     return (
       <div className="flex w-full justify-start mt-2">
         <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/30 px-3 py-1.5 rounded-md border border-border/50">
-          {completed ? <Check className="h-3 w-3 text-green-500" /> : <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
           <span className="font-mono">{msg.name}</span>
+          {completed ? <Check className="h-3 w-3 text-green-500" /> : <Loader2 className="h-3 w-3 animate-spin text-blue-500" />}
         </div>
       </div>
     );
@@ -106,7 +113,7 @@ function MessageBlock({ msg, completed }: { msg: Message, completed?: boolean })
       </div>
     );
   }
-  
+
   return null;
 }
 
@@ -144,7 +151,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
     if (!activeChatId) return
     try {
       const data = await api.projects.chats.getHistory(projectId, activeChatId)
-      const msgs = (data || []).map(m => ({ ...m, id: m.id || generateId(), completed: m.type === "tool_call" ? true : undefined }));
+      const msgs = (data || []).map(m => ({ ...m, id: m.id || generateId() }));
       setMessages(msgs)
     } catch (e) { console.error(e) }
   }
@@ -271,28 +278,31 @@ export default function ChatArea({ projectId }: { projectId: string }) {
 
         setMessages(prev => {
           const newMsgs = [...prev];
+          const last = newMsgs[newMsgs.length - 1];
+
+          if (parsed.type !== "reasoning" && last?.type === "reasoning") {
+            newMsgs[newMsgs.length - 1] = { ...last, inprogress: false };
+          }
 
           if (parsed.type === "content") {
-             const last = newMsgs[newMsgs.length - 1];
-             if (last && last.role === "assistant" && last.type === "text") {
-                 last.content += parsed.content;
-             } else {
-                 newMsgs.push({ id: generateId(), role: "assistant", type: "text", content: parsed.content });
-             }
+            if (last && last.role === "assistant" && last.type === "text") {
+              last.content += parsed.content;
+            } else {
+              newMsgs.push({ id: generateId(), role: "assistant", type: "text", content: parsed.content });
+            }
           } else if (parsed.type === "reasoning") {
-             const last = newMsgs[newMsgs.length - 1];
-             if (last && last.role === "assistant" && last.type === "reasoning") {
-                 last.content += parsed.content;
-             } else {
-                 newMsgs.push({ id: generateId(), role: "assistant", type: "reasoning", content: parsed.content });
-             }
+            if (last && last.role === "assistant" && last.type === "reasoning") {
+              last.content += parsed.content;
+            } else {
+              newMsgs.push({ id: generateId(), role: "assistant", type: "reasoning", content: parsed.content, inprogress: true });
+            }
           } else if (parsed.type === "tool_start") {
-             newMsgs.push({ id: generateId(), role: "assistant", type: "tool_call", name: parsed.tool, content: JSON.stringify(parsed.input || {}) });
+            newMsgs.push({ id: generateId(), role: "assistant", type: "tool_call", name: parsed.tool, content: JSON.stringify(parsed.input || {}), inprogress: true });
           } else if (parsed.type === "tool_end") {
-             const index = newMsgs.map(m => m.type === "tool_call" && m.name === parsed.tool).lastIndexOf(true);
-             if (index !== -1) {
-                newMsgs[index] = { ...newMsgs[index], completed: true } as any;
-             }
+            const index = newMsgs.map(m => m.type === "tool_call" && m.name === parsed.tool).lastIndexOf(true);
+            if (index !== -1) {
+              newMsgs[index] = { ...newMsgs[index], inprogress: false } as any;
+            }
           }
 
           return newMsgs;
@@ -378,7 +388,7 @@ export default function ChatArea({ projectId }: { projectId: string }) {
                 Send a message to start researching.
               </div>
             ) : (
-              messages.map((msg) => <MessageBlock key={msg.id} msg={msg} completed={(msg as any).completed} />)
+              messages.map((msg) => <MessageBlock key={msg.id} msg={msg} completed={!msg.inprogress} />)
             )}
 
             {isWaiting && (
