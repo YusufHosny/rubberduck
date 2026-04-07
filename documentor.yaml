@@ -1,0 +1,26 @@
+provider: vertexai
+model: gemini-3.1-pro-preview
+docs_dir: docs
+include_footer: true
+use_style_md: true
+style_md_path: docs/style.md
+use_git: true
+required_files:
+- filename: README.md
+  description: The sole documentation file required to get a user up and running with
+    the Rubberduck application on their local machine, covering project summary, features,
+    installation, usage, and screenshots.
+  type: Getting Started
+ignore_above_size_kb: 100
+ignore_patterns:
+- .git
+- __pycache__
+- venv
+- .venv
+- env
+- node_modules
+- .env
+- '*.pyc'
+- '*.pyo'
+use_agent: true
+agent_threshold_kb: -1
